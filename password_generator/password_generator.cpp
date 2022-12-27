@@ -28,6 +28,11 @@ int main(int argc, char** argv)
 				((uint32_t)password_generator::generate_password_flags::use_digits) |
 				((uint32_t)password_generator::generate_password_flags::use_symbols);
 
+	if (sodium_init() < 0) {
+		out.result = password_generator::generate_password_result::fail_could_not_init_hasher;
+		return (int)out.result;
+	}
+
 	if (argc >= 4) {
 		// std::string_view program = argv[0];
 		std::string_view salt  = argv[1];
@@ -49,7 +54,7 @@ int main(int argc, char** argv)
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_digits;
 			} else if (arg.compare("--use-symbols"sv) == 0 || arg.compare("-s"sv) == 0) {
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_symbols;
-			} else if (arg.compare("--max-length"sv) == 0 && ((i+1) < argc)) {
+			} else if (arg.compare("--max-length"sv) == 0 && ((i + 1) < argc)) {
 				std::string_view len = argv[i + 1];
 				std::from_chars(len.data(), len.data() + len.size(), opt.max_length);
 				i++;
@@ -74,6 +79,7 @@ int main(int argc, char** argv)
 			std::cout << "password copied to clipboard!\n";
 		} else {
 			std::cout << "failed to generate password!\n";
+			std::cout << "code: " << (int)out.result << '\n';
 		}
 	} else {
 		usage();
