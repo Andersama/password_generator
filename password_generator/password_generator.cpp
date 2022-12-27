@@ -39,20 +39,28 @@ int main(int argc, char** argv)
 		size_t   seed      = {0};
 
 		for (size_t i = 4; i < argc; i++) {
-			std::string_view opt = argv[i];
+			std::string_view arg = argv[i];
 
-			if (opt.compare("--use-lowercase"sv) == 0) {
+			if (arg.compare("--use-lowercase"sv) == 0 || arg.compare("-l"sv) == 0) {
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_lowercase;
-			} else if (opt.compare("--use-uppercase"sv) == 0) {
+			} else if (arg.compare("--use-uppercase"sv) == 0 || arg.compare("-u"sv) == 0) {
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_uppercase;
-			} else if (opt.compare("--use-digits"sv) == 0) {
+			} else if (arg.compare("--use-digits"sv) == 0 || arg.compare("-d"sv) == 0) {
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_digits;
-			} else if (opt.compare("--use-symbols"sv) == 0) {
+			} else if (arg.compare("--use-symbols"sv) == 0 || arg.compare("-s"sv) == 0) {
 				new_flags |= (uint32_t)password_generator::generate_password_flags::use_symbols;
+			} else if (arg.compare("--max-length"sv) == 0 && ((i+1) < argc)) {
+				std::string_view len = argv[i + 1];
+				std::from_chars(len.data(), len.data() + len.size(), opt.max_length);
+				i++;
+			} else if (arg.compare("--min-length"sv) == 0 && ((i + 1) < argc)) {
+				std::string_view len = argv[i + 1];
+				std::from_chars(len.data(), len.data() + len.size(), opt.min_length);
+				i++;
 			} else {
 				// try to parse a number as a seed
 				seeded = true;
-				std::from_chars(opt.data(), opt.data() + opt.size(), seed);
+				std::from_chars(arg.data(), arg.data() + arg.size(), seed);
 			}
 		}
 
