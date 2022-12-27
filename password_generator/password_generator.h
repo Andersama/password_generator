@@ -8,9 +8,15 @@
 #include <charconv>
 #include <array>
 
-#include <openssl/ssl.h>
-#include <openssl/decoder.h>
-#include <openssl/encoder.h>
+// #include <openssl/ssl.h>
+// #include <openssl/decoder.h>
+// #include <openssl/encoder.h>
+
+// #include "cryptopp/sha3.h"
+// #include "cryptopp/chacha.h"
+
+// #include <hydrogen.h>
+#include <sodium.h>
 
 namespace pcg {
 	typedef struct {
@@ -234,6 +240,8 @@ namespace password_generator {
 		std::to_chars(output.password.data() + num_offset, output.password.data() + end_num_offset, options.seed);
 
 		// SHA3-512 hash the combined string
+#if 0
+		// using openssl
 		std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> m_context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
 		const EVP_MD*                                           m_algorithm = EVP_get_digestbyname("SHA3-512");
 
@@ -270,7 +278,36 @@ namespace password_generator {
 			output.password.clear();
 			return;
 		}
+#endif
+#if 0
+		// using cryptopp
+		// class SHA3_512
+		using namespace CryptoPP;
+		SHA3_512 sha3_512_hasher;
+		sha3_512_hasher.Update((const byte*)output.password.data(), output.password.size());
+		size_t digest_length = sha3_512_hasher.DigestSize();
+		sha3_512_hasher.Final((byte*)output.password.data() + end_size);
+#endif
+#if 0
+		// hydro_hash_KEYBYTES
+		// using libhydrogen
+		size_t digest_length = (512 / 8);
+		//hydro_hash_hash((uint8_t*)output.password.data() + output.password.size(), digest_length, output.password.data(), output.password.size(), "hash__me", NULL);
+#endif
+#if 1
+		size_t digest_length = (crypto_generichash_KEYBYTES_MAX / 8); // should be >= 64
+		if (sodium_init() < 0) {
+			/* panic! the library couldn't be initialized; it is not safe to use */
+			return;
+		}
 
+		// build the program and personalize the key if you'd like
+		using namespace std::literals;
+		std::string_view key = "edit_me!"sv;
+		crypto_generichash((uint8_t*)output.password.data() + output.password.size(), digest_length,
+						(const unsigned char*)output.password.data(), output.password.size(),
+						(const unsigned char*)key.data(), key.size());
+#endif
 		// Make the hash our new string
 		output.password.assign(output.password.data() + end_size, digest_length);
 
@@ -290,7 +327,7 @@ namespace password_generator {
 		std::memcpy(&rng_1, output.password.data() + sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
 		std::memcpy(&rng_2, output.password.data() + 2 * sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
 		std::memcpy(&rng_3, output.password.data() + 3 * sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
-
+#if 0
 		// shuffle things a bit
 		pcg32_random_r(&rng_0);
 
@@ -305,28 +342,30 @@ namespace password_generator {
 		pcg32_random_r(&rng_3);
 		pcg32_random_r(&rng_3);
 		pcg32_random_r(&rng_3);
-
+#endif
 		// initalize romu with 512 bit sha3
 		std::memcpy(&rrng_0, output.password.data(), sizeof(pcg::romu64_quad_random_t));
 		std::memcpy(&rrng_1, output.password.data() + sizeof(pcg::romu64_quad_random_t),
 						sizeof(pcg::romu64_quad_random_t));
-		
-		//shuffle things a bit
+
+		#if 0
+		// shuffle things a bit
 		romu_quad_random_r(&rrng_0);
 
 		romu_quad_random_r(&rrng_1);
 		romu_quad_random_r(&rrng_1);
+		#endif
 
 		// Use various base encodings to generate the resulting password
-		
+
 		// must be at least 256 to potentially fit entire alphabet
 		// (worst-case) (8192-256)/8192 -> 96.8%~ accept rate
 		//              (4096-256)/4096 -> 93.7%~ accept rate
-		
+
 		// (nice-case (512-94)/512 -> 91.7%~ accept rate
 		std::array<char, 8192> encode_alphabet = {};
-		//std::array<char, 256> decode_alphabet = {};
-		uint32_t              idx             = 0;
+		// std::array<char, 256> decode_alphabet = {};
+		uint32_t idx = 0;
 
 		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
 			for (size_t c = 0; c < lowercase.size(); c++) {
@@ -352,8 +391,14 @@ namespace password_generator {
 			}
 		}
 
+		// no alphabet
+		if (idx == 0) {
+			return;
+		}
+
 		// make it more statistically likely to land an encoded value by repeating the alphabet
 		uint32_t repeat_idx = idx;
+		uint32_t range      = idx;
 		if (idx % 256 != 0) { // if our alphabet is entire 256 characters don't bother expanding
 			for (; (repeat_idx + idx < encode_alphabet.size()); repeat_idx += idx) {
 				std::memcpy(encode_alphabet.data() + repeat_idx, encode_alphabet.data(), idx);
@@ -395,17 +440,31 @@ namespace password_generator {
 
 		uint32_t circle_buf_size = max_password_size + 8;
 
+		uint32_t divisor = ((-range) / range) + 1;
+
 		for (;;) {
 			// uint32_t v = multi_pcg32_random_r(&rng_0, &rng_1, &rng_2, &rng_3);
-			uint32_t v = mutli_romu_quad_random_r(
-							&rrng_0, &rrng_1)
-				+ multi_pcg32_random_r(&rng_0, &rng_1, &rng_2, &rng_3);
+			// uint32_t v = mutli_romu_quad_random_r(&rrng_0, &rrng_1) + multi_pcg32_random_r(&rng_0, &rng_1, &rng_2, &rng_3);
+			uint32_t v = {};
 
-			tmp_buf = (tmp_buf << 32) | v;
-			tmp_buf_bits += 32;
+			crypto_stream_xchacha20((unsigned char*)&v, sizeof(v), (const unsigned char*)&rrng_0, (const unsigned char*)&rrng_1);
+			// rrng_0.y_state += 1;
+			rrng_0.x_state += 1;
+			// use last 16 bytes of rrng_0 to drive pcg (last 8 aren't used by chacha)
+			pcg32_random_r((pcg::pcg32_random_t*)&(rrng_0.y_state)); 
+			//we're now using all 512 bits, 256 are a key and 192 are a nonce
 
 			// do base_x encoding mapping binary data stream into valid character sets
+
+			uint32_t h_value = v / divisor;
+			output.password.data()[max_password_size + (out_i % circle_buf_size)] = encode_alphabet[h_value];
+			out_i += (h_value < range);
+#if 0
+			tmp_buf = (tmp_buf << 32) | v;
+			tmp_buf_bits += 32;
 			do {
+
+				tmp_buf_bits -= 32;
 				uint64_t lop_off = tmp_buf << (64 - tmp_buf_bits);
 				uint32_t h_value = (lop_off >> mx_shift);
 
@@ -429,6 +488,7 @@ namespace password_generator {
 				out_i++;
 #endif
 			} while (tmp_buf_bits >= mx_bits_shift);
+#endif
 
 			for (; check_i < out_i; check_i++) {
 				monotonic_increment(since_lowercase);
