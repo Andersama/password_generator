@@ -12,6 +12,103 @@
 #include <openssl/decoder.h>
 #include <openssl/encoder.h>
 
+namespace pcg {
+	typedef struct {
+		uint64_t state;
+		uint64_t inc;
+	} pcg32_random_t;
+
+	inline uint32_t pcg32_random_r(pcg32_random_t* rng) noexcept
+	{
+		uint64_t oldstate = rng->state;
+		// Advance internal state
+		rng->state = oldstate * 6364136223846793005ULL + (rng->inc | 1);
+		// Calculate output function (XSH RR), uses old state for max ILP
+		uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
+		uint32_t rot        = oldstate >> 59u;
+		return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
+	}
+
+	typedef struct {
+		uint64_t w_state;
+		uint64_t x_state;
+		uint64_t y_state;
+		uint64_t z_state;
+	} romu64_quad_random_t;
+
+	typedef struct {
+		uint64_t x_state;
+		uint64_t y_state;
+		uint64_t z_state;
+	} romu64_trio_random_t;
+
+	inline uint64_t rotl(uint64_t d, uint64_t lrot) noexcept
+	{
+		return ((d << (lrot)) | (d >> (8 * sizeof(d) - (lrot))));
+	}
+
+	inline uint64_t romu_trio_random_r(romu64_trio_random_t* rng) noexcept
+	{
+		uint64_t xp  = rng->x_state;
+		uint64_t yp  = rng->y_state;
+		uint64_t zp  = rng->z_state;
+		rng->x_state = 15241094284759029579u * zp;
+		rng->y_state = yp - xp;
+		rng->y_state = ((rng->y_state << (12)) | (rng->y_state >> (8 * sizeof(rng->y_state) - (12))));
+		rng->z_state = zp - yp;
+		rng->z_state = ((rng->z_state << (44)) | (rng->z_state >> (8 * sizeof(rng->z_state) - (44))));
+	}
+
+	inline uint64_t romu_quad_random_r(romu64_quad_random_t* rng) noexcept
+	{
+		uint64_t wp = rng->w_state;
+		uint64_t xp = rng->x_state;
+		uint64_t yp = rng->y_state;
+		uint64_t zp = rng->z_state;
+
+		rng->w_state = 15241094284759029579u * zp; // a-mult
+		rng->x_state = zp + rotl(wp, 52);          // b-rotl, c-add
+		rng->y_state = yp - xp;                    // d-sub
+		rng->z_state = yp + wp;                    // e-add
+		rng->z_state = rotl(rng->z_state, 19);     // f-rotl
+		return xp;
+	}
+
+	inline uint32_t multi_pcg32_random_r(
+					pcg32_random_t* rng_0, pcg32_random_t* rng_1, pcg32_random_t* rng_2, pcg32_random_t* rng_3) noexcept
+	{
+		return (pcg32_random_r(rng_0) ^ pcg32_random_r(rng_1)) + (pcg32_random_r(rng_2) ^ pcg32_random_r(rng_3));
+	}
+
+	inline uint32_t mutli_romu_quad_random_r(romu64_quad_random_t* rng_0, romu64_quad_random_t* rng_1) noexcept
+	{
+		return romu_quad_random_r(rng_0) + romu_quad_random_r(rng_1);
+	}
+
+#if 0
+	inline uint32_t bounded_rand(rng_t& rng, uint32_t range)
+	{
+		uint32_t x = rng();
+		uint64_t m = uint64_t(x) * uint64_t(range);
+		uint32_t l = uint32_t(m);
+		if (l < range) {
+			uint32_t t = -range;
+			if (t >= range) {
+				t -= range;
+				if (t >= range)
+					t %= range;
+			}
+			while (l < t) {
+				x = rng();
+				m = uint64_t(x) * uint64_t(range);
+				l = uint32_t(m);
+			}
+		}
+		return m >> 32;
+	}
+#endif
+} // namespace pcg
+
 namespace password_generator {
 
 	struct clear_string : std::string {
@@ -115,9 +212,11 @@ namespace password_generator {
 
 		const size_t tmp_buffer_size = 8096;
 
-		const size_t hash_me_size = (salt.size() + login.size() + master_password.size() + 2 + 2 + 64) * 2;
+		const size_t hash_me_size     = (salt.size() + login.size() + master_password.size() + 2 + 2 + 64) * 2;
+		const size_t reserve_hash     = hash_me_size + max_password_size + tmp_buffer_size;
+		const size_t reserve_password = 2 * max_password_size;
 
-		output.password.reserve(hash_me_size + max_password_size + tmp_buffer_size);
+		output.password.reserve(std::max(reserve_hash, reserve_password));
 
 		output.password.append(salt.data(), salt.size());
 		output.password.append(">+", 2);
@@ -175,10 +274,58 @@ namespace password_generator {
 		// Make the hash our new string
 		output.password.assign(output.password.data() + end_size, digest_length);
 
-		// Use various base encodings to generate the resulting password
+		// TODO: cryptographically secure prng
+		// 512 bit pcg
+		pcg::pcg32_random_t rng_0 = {0};
+		pcg::pcg32_random_t rng_1 = {0};
+		pcg::pcg32_random_t rng_2 = {0};
+		pcg::pcg32_random_t rng_3 = {0};
 
-		std::array<char, 256> encode_alphabet = {};
-		std::array<char, 256> decode_alphabet = {};
+		// 512 bit romu pcg
+		pcg::romu64_quad_random_t rrng_0 = {0};
+		pcg::romu64_quad_random_t rrng_1 = {0};
+
+		// initalize pcg with 512 bit sha3
+		std::memcpy(&rng_0, output.password.data(), sizeof(pcg::pcg32_random_t));
+		std::memcpy(&rng_1, output.password.data() + sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
+		std::memcpy(&rng_2, output.password.data() + 2 * sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
+		std::memcpy(&rng_3, output.password.data() + 3 * sizeof(pcg::pcg32_random_t), sizeof(pcg::pcg32_random_t));
+
+		// shuffle things a bit
+		pcg32_random_r(&rng_0);
+
+		pcg32_random_r(&rng_1);
+		pcg32_random_r(&rng_1);
+
+		pcg32_random_r(&rng_2);
+		pcg32_random_r(&rng_2);
+		pcg32_random_r(&rng_2);
+
+		pcg32_random_r(&rng_3);
+		pcg32_random_r(&rng_3);
+		pcg32_random_r(&rng_3);
+		pcg32_random_r(&rng_3);
+
+		// initalize romu with 512 bit sha3
+		std::memcpy(&rrng_0, output.password.data(), sizeof(pcg::romu64_quad_random_t));
+		std::memcpy(&rrng_1, output.password.data() + sizeof(pcg::romu64_quad_random_t),
+						sizeof(pcg::romu64_quad_random_t));
+		
+		//shuffle things a bit
+		romu_quad_random_r(&rrng_0);
+
+		romu_quad_random_r(&rrng_1);
+		romu_quad_random_r(&rrng_1);
+
+		// Use various base encodings to generate the resulting password
+		
+		// must be at least 256 to potentially fit entire alphabet
+		// (worst-case) (8192-256)/8192 -> 96.8%~ accept rate
+		//              (4096-256)/4096 -> 93.7%~ accept rate
+		
+		// (nice-case (512-94)/512 -> 91.7%~ accept rate
+		std::array<char, 8192> encode_alphabet = {};
+		//std::array<char, 256> decode_alphabet = {};
 		uint32_t              idx             = 0;
 
 		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
@@ -205,6 +352,17 @@ namespace password_generator {
 			}
 		}
 
+		// make it more statistically likely to land an encoded value by repeating the alphabet
+		uint32_t repeat_idx = idx;
+		if (idx % 256 != 0) { // if our alphabet is entire 256 characters don't bother expanding
+			for (; (repeat_idx + idx < encode_alphabet.size()); repeat_idx += idx) {
+				std::memcpy(encode_alphabet.data() + repeat_idx, encode_alphabet.data(), idx);
+			}
+		}
+		// pretend our alphabet is larger than it is
+		idx = repeat_idx;
+
+#if 0
 		for (size_t c = 0; c < decode_alphabet.size(); c++) {
 			decode_alphabet[c] = 0xff;
 		}
@@ -212,28 +370,53 @@ namespace password_generator {
 		for (size_t c = 0; c < idx; c++) {
 			decode_alphabet[encode_alphabet[c]] = c;
 		}
+#endif
 
-		const uint32_t alphabet_size = idx;
+		const uint64_t alphabet_size = idx;
 		const uint32_t clzeros       = std::countl_zero(alphabet_size);
 
 		const uint32_t mx_shift = clzeros;
 		const uint32_t mn_shift = clzeros + 1;
 
-		const uint32_t mx_bits_shift = 32 - mx_shift;
-		const uint32_t mn_bits_shift = 32 - mn_shift;
+		const uint32_t mx_bits_shift = 64 - mx_shift;
+		const uint32_t mn_bits_shift = 64 - mn_shift;
 
-		uint32_t tmp_buf      = 0;
+		uint64_t tmp_buf      = 0;
 		uint32_t tmp_buf_bits = 0;
 		size_t   i            = 0;
-		size_t   out_i        = 0;
-		for (; i < output.password.size(); i++) {
-			// load a byte into the buffer (8 bits)
-			uint8_t v = output.password[i];
-			tmp_buf   = (tmp_buf << 8) | v;
-			tmp_buf_bits += 8;
 
+		size_t check_i = 0;
+		size_t out_i   = 0;
+
+		uint32_t since_lowercase = uint32_t{0xffffffff};
+		uint32_t since_uppercase = uint32_t{0xffffffff};
+		uint32_t since_digit     = uint32_t{0xffffffff};
+		uint32_t since_symbol    = uint32_t{0xffffffff};
+
+		uint32_t circle_buf_size = max_password_size + 8;
+
+		for (;;) {
+			// uint32_t v = multi_pcg32_random_r(&rng_0, &rng_1, &rng_2, &rng_3);
+			uint32_t v = mutli_romu_quad_random_r(
+							&rrng_0, &rrng_1)
+				+ multi_pcg32_random_r(&rng_0, &rng_1, &rng_2, &rng_3);
+
+			tmp_buf = (tmp_buf << 32) | v;
+			tmp_buf_bits += 32;
+
+			// do base_x encoding mapping binary data stream into valid character sets
 			do {
-				uint32_t lop_off = tmp_buf << (32 - tmp_buf_bits);
+				uint64_t lop_off = tmp_buf << (64 - tmp_buf_bits);
+				uint32_t h_value = (lop_off >> mx_shift);
+
+				// unconditional write
+				output.password.data()[max_password_size + (out_i % circle_buf_size)] = encode_alphabet[h_value];
+				tmp_buf_bits -= mx_bits_shift;
+
+				// discard values that were out of range
+				out_i += (h_value < idx);
+#if 0
+				uint64_t lop_off = tmp_buf << (64 - tmp_buf_bits);
 				uint32_t h_value = (lop_off >> mx_shift);
 				uint32_t l_value = (lop_off >> mn_shift);
 
@@ -241,55 +424,57 @@ namespace password_generator {
 				uint32_t e_value = (h_value >= idx) ? l_value : h_value;
 
 				tmp_buf_bits -= e_bits;
-
-				output.password.data()[output.password.size() + out_i] = encode_alphabet[e_value];
+				// write character into ring buffer
+				output.password.data()[max_password_size + (out_i % circle_buf_size)] = encode_alphabet[e_value];
 				out_i++;
+#endif
 			} while (tmp_buf_bits >= mx_bits_shift);
-		}
 
-		output.password.assign(output.password.data() + output.password.size(), out_i);
+			for (; check_i < out_i; check_i++) {
+				monotonic_increment(since_lowercase);
+				monotonic_increment(since_uppercase);
+				monotonic_increment(since_digit);
+				monotonic_increment(since_symbol);
 
-		size_t           idx_to_check = (output.password.size() - options.max_length);
-		std::string_view current_password{output.password.data(), output.password.size()};
+				// categorize the password character into exclusive groups
+				std::string_view potential_password_char = std::string_view{
+								output.password.data() + max_password_size + (check_i % circle_buf_size),
+								1}; // current_password.substr(idx, 1);
+				uint32_t char_flags = classify_password(potential_password_char);
 
-		std::cout << current_password << '\n';
+				// reset the counts if any of the flags are set
+				since_lowercase = (char_flags & (uint32_t)generate_password_flags::use_lowercase) ? 0 : since_lowercase;
+				since_uppercase = (char_flags & (uint32_t)generate_password_flags::use_uppercase) ? 0 : since_uppercase;
+				since_digit     = (char_flags & (uint32_t)generate_password_flags::use_digits) ? 0 : since_digit;
+				since_symbol    = (char_flags & (uint32_t)generate_password_flags::use_symbols) ? 0 : since_symbol;
 
-		uint32_t since_lowercase = uint32_t{0xffffffff};
-		uint32_t since_uppercase = uint32_t{0xffffffff};
-		uint32_t since_digit     = uint32_t{0xffffffff};
-		uint32_t since_symbol    = uint32_t{0xffffffff};
+				// combine counts back into an aggregated bitset
+				uint32_t aggregate_flags =
+								((since_lowercase < max_password_size) *
+												(uint32_t)generate_password_flags::use_lowercase) |
+								((since_uppercase < max_password_size) *
+												(uint32_t)generate_password_flags::use_uppercase) |
+								((since_digit < max_password_size) * (uint32_t)generate_password_flags::use_digits) |
+								((since_symbol < max_password_size) * (uint32_t)generate_password_flags::use_symbols);
 
-		for (size_t idx = 0; idx < output.password.size(); idx++) {
-			monotonic_increment(since_lowercase);
-			monotonic_increment(since_uppercase);
-			monotonic_increment(since_digit);
-			monotonic_increment(since_symbol);
+				// check if the bitset is satisfied and that we're at least max_length characters
+				if ((aggregate_flags & options.flags) == options.flags && !(check_i < max_password_size)) {
+					output.result = generate_password_result::ok;
+					// copy the ring buffered password back
+					for (size_t out_c = 0; out_c < max_password_size; out_c++) {
+						output.password.data()[out_c] = output.password.data()[max_password_size +
+																			   ((check_i - max_password_size + out_c) %
+																							   circle_buf_size)];
+					}
+					// make into a proper string
+					output.password.assign(output.password.data(), max_password_size);
+					return;
+				}
+			}
 
-			// categorize the password character into exclusive groups
-			std::string_view potential_password_char =
-							std::string_view{current_password.data() + idx, 1}; // current_password.substr(idx, 1);
-			uint32_t char_flags = classify_password(potential_password_char);
-
-			// reset the counts if any of the flags are set
-			since_lowercase = (char_flags & (uint32_t)generate_password_flags::use_lowercase) ? 0 : since_lowercase;
-			since_uppercase = (char_flags & (uint32_t)generate_password_flags::use_uppercase) ? 0 : since_uppercase;
-			since_digit     = (char_flags & (uint32_t)generate_password_flags::use_digits) ? 0 : since_digit;
-			since_symbol    = (char_flags & (uint32_t)generate_password_flags::use_symbols) ? 0 : since_symbol;
-
-			// combine counts back into an aggregated bitset
-			uint32_t aggregate_flags =
-							((since_lowercase < options.max_length) *
-											(uint32_t)generate_password_flags::use_lowercase) |
-							((since_uppercase < options.max_length) *
-											(uint32_t)generate_password_flags::use_uppercase) |
-							((since_digit < options.max_length) * (uint32_t)generate_password_flags::use_digits) |
-							((since_symbol < options.max_length) * (uint32_t)generate_password_flags::use_symbols);
-
-			// check if the bitset is satisfied and that we're at least max_length characters
-			if ((aggregate_flags & options.flags) == options.flags && !(idx < options.max_length)) {
-				output.result = generate_password_result::ok;
-				output.password.assign(output.password.data() + (idx - options.max_length), options.max_length);
-				return;
+			// fail if we've run too long
+			if (out_i > 0xffff) {
+				break;
 			}
 		}
 
