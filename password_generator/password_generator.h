@@ -129,10 +129,12 @@ private:
 
 	using namespace std::literals;
 	std::array<std::string_view, ((uint32_t)generate_password_result::fail_password_required_n_chars) + 1>
-					result_string = {
-					"ok"sv, "could not find a suitable password to meet the requirements"sv, "salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
-					"coult not initialize hasher"sv, "no alphabet selected"sv, "min length not <= than max length"sv,
-					"max length was too large keep under 65535"sv, "max length was under n required characters needed to complete password"sv};
+					result_string = {"ok"sv, "could not find a suitable password to meet the requirements"sv,
+									"salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
+									"coult not initialize hasher"sv, "no alphabet selected"sv,
+									"min length not <= than max length"sv,
+									"max length was too large keep under 65535"sv,
+									"max length was under n required characters needed to complete password"sv};
 
 	struct generate_password_options {
 		uint64_t seed       = 0;
@@ -261,7 +263,7 @@ private:
 			return;
 		}
 
-		const size_t tmp_buffer_size = 8096;
+		const size_t tmp_buffer_size  = 8096;
 		const size_t hash_me_size     = (salt.size() + login.size() + master_password.size() + 2 + 2 + 64) * 2;
 		const size_t reserve_hash     = hash_me_size + max_password_size + tmp_buffer_size;
 		const size_t reserve_password = 2 * max_password_size;
@@ -381,6 +383,169 @@ private:
 
 		std::memset(hashed.data(), 0, hashed.size());
 		output.password.clear();
+		return;
+	}
+
+	void random_data(char* data, size_t length)
+	{
+		std::array<uint64_t, (crypto_generichash_KEYBYTES_MAX / sizeof(uint64_t))* 2 + 1> temp   = {};
+		std::array<uint64_t, 3>                                                           temp_2 = {};
+		std::string_view                                                                  key    = "edit_me!"sv;
+
+		temp_2[1] = (size_t)data;
+		temp_2[2] = length;
+
+		size_t l = 0;
+		do {
+			randombytes_buf(temp.data(), temp.size() * sizeof(uint64_t));
+			// make sure randombytes_buf is not our only source of randomness
+			std::chrono::steady_clock::time_point n = std::chrono::steady_clock::now();
+			temp_2[0]                               = n.time_since_epoch().count();
+			temp_2[2] += 1;
+
+			size_t digest_length = crypto_generichash_KEYBYTES_MAX;
+
+			using namespace std::literals;
+
+			crypto_generichash((uint8_t*)temp.data(), digest_length, (const unsigned char*)temp_2.data(), temp_2.size(),
+							(const unsigned char*)key.data(), key.size());
+
+			size_t i = 0;
+			for (; i < digest_length && l < length; i++, l++) {
+				data[l] = ((char*)temp.data())[i] ^ ((char*)temp.data())[i + digest_length];
+			}
+		} while (l < length);
+	}
+
+	void generate_random_password(password_output& output, const generate_password_options& options)
+	{
+		output.result                         = generate_password_result::fail;
+		std::array<char, 256> encode_alphabet = {};
+
+		std::array<uint32_t, 8> temp = {};
+
+		const size_t max_password_size = options.max_length;
+		const size_t circle_buf_size   = max_password_size + temp.size() + 8;
+		output.password.reserve(circle_buf_size * 2);
+
+		uint32_t idx            = 0;
+		uint32_t required_chars = 0;
+
+		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
+			required_chars += 1;
+			for (size_t c = 0; c < lowercase.size(); c++) {
+				encode_alphabet[idx++] = lowercase[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_uppercase) {
+			required_chars += 1;
+			for (size_t c = 0; c < uppercase.size(); c++) {
+				encode_alphabet[idx++] = uppercase[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_digits) {
+			required_chars += 1;
+			for (size_t c = 0; c < digits.size(); c++) {
+				encode_alphabet[idx++] = digits[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_symbols) {
+			required_chars += 1;
+			for (size_t c = 0; c < symbols.size(); c++) {
+				encode_alphabet[idx++] = symbols[c];
+			}
+		}
+
+		// really make sure our data's shuffled around, permute our output
+		for (size_t x = 1; x < idx; x++) {
+			size_t range   = x;
+
+			size_t divisor = (~size_t{0}) / range;
+			size_t rng     = {};
+			random_data((char*)&rng, sizeof(rng));
+			size_t v = rng / divisor;
+			if (range) {
+				while (v >= range) {
+					random_data((char*)&rng, sizeof(rng));
+					v = rng / divisor;
+				}
+			}
+
+			std::swap(encode_alphabet[x], encode_alphabet[v]);
+		}
+
+		const uint32_t alphabet_size = idx;
+
+		size_t check_i = 0;
+		size_t out_i   = 0;
+
+		uint32_t since_lowercase = uint32_t{0xffffffff};
+		uint32_t since_uppercase = uint32_t{0xffffffff};
+		uint32_t since_digit     = uint32_t{0xffffffff};
+		uint32_t since_symbol    = uint32_t{0xffffffff};
+
+		uint32_t divisor = uint32_t{0xffffffff} / alphabet_size;
+
+		for (;;) {
+			random_data((char*)temp.data(), temp.size() * sizeof(uint32_t));
+
+			for (size_t i = 0; i < temp.size(); i++) {
+				// do base_x encoding mapping binary data stream into valid character sets
+				uint32_t h_value                                                      = temp[i] / divisor;
+				output.password.data()[max_password_size + (out_i % circle_buf_size)] = encode_alphabet[h_value];
+				// discard out of bounds
+				out_i += (h_value < alphabet_size);
+			}
+
+			for (; check_i < out_i; check_i++) {
+				monotonic_increment(since_lowercase);
+				monotonic_increment(since_uppercase);
+				monotonic_increment(since_digit);
+				monotonic_increment(since_symbol);
+
+				// categorize the password character into exclusive groups
+				std::string_view potential_password_char = std::string_view{
+								output.password.data() + max_password_size + (check_i % circle_buf_size),
+								1}; // current_password.substr(idx, 1);
+				uint32_t char_flags = classify_password(potential_password_char);
+
+				// reset the counts if any of the flags are set
+				since_lowercase = (char_flags & (uint32_t)generate_password_flags::use_lowercase) ? 0 : since_lowercase;
+				since_uppercase = (char_flags & (uint32_t)generate_password_flags::use_uppercase) ? 0 : since_uppercase;
+				since_digit     = (char_flags & (uint32_t)generate_password_flags::use_digits) ? 0 : since_digit;
+				since_symbol    = (char_flags & (uint32_t)generate_password_flags::use_symbols) ? 0 : since_symbol;
+
+				// combine counts back into an aggregated bitset
+				uint32_t aggregate_flags =
+								((since_lowercase < max_password_size) *
+												(uint32_t)generate_password_flags::use_lowercase) |
+								((since_uppercase < max_password_size) *
+												(uint32_t)generate_password_flags::use_uppercase) |
+								((since_digit < max_password_size) * (uint32_t)generate_password_flags::use_digits) |
+								((since_symbol < max_password_size) * (uint32_t)generate_password_flags::use_symbols);
+
+				// check if the bitset is satisfied and that we're at least max_length characters
+				if ((aggregate_flags & options.flags) == options.flags && !(check_i < max_password_size)) {
+					std::memset(temp.data(), 0, temp.size());
+
+					output.result = generate_password_result::ok;
+					// copy the ring buffered password back
+					for (size_t out_c = 0; out_c < max_password_size; out_c++) {
+						output.password.data()[out_c] = output.password.data()[max_password_size +
+																			   ((check_i - max_password_size + out_c) %
+																							   circle_buf_size)];
+					}
+					// make into a proper string
+					output.password.assign(output.password.data(), max_password_size);
+					return;
+				}
+			}
+		}
+
+		std::memset(temp.data(), 0, temp.size());
 		return;
 	}
 } // namespace password_generator
