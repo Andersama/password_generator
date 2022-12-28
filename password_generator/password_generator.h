@@ -123,14 +123,16 @@ private:
 		fail_could_not_init_hasher,
 		fail_no_alphabet,
 		fail_min_max_lengths,
-		fail_too_large_max_length
+		fail_too_large_max_length,
+		fail_password_required_n_chars
 	};
 
 	using namespace std::literals;
-	std::array<std::string_view, ((uint32_t)generate_password_result::fail_too_large_max_length) + 1> result_string = {
-					"ok"sv, "fail"sv, "salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
-					"coult not initialize hasher"sv, "no alphbet selected"sv, "min length not <= than max length"sv,
-					"max length was too large keep under 65535"sv};
+	std::array<std::string_view, ((uint32_t)generate_password_result::fail_password_required_n_chars) + 1>
+					result_string = {
+					"ok"sv, "could not find a suitable password to meet the requirements"sv, "salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
+					"coult not initialize hasher"sv, "no alphabet selected"sv, "min length not <= than max length"sv,
+					"max length was too large keep under 65535"sv, "max length was under n required characters needed to complete password"sv};
 
 	struct generate_password_options {
 		uint64_t seed       = 0;
@@ -208,9 +210,58 @@ private:
 			output.result = generate_password_result::fail_too_large_max_length;
 			return;
 		}
+		// Use various base encodings to generate the resulting password
+
+		// must be at least 256 to potentially fit entire alphabet
+		// (worst-case) (8192-256)/8192 -> 96.8%~ accept rate
+		//              (4096-256)/4096 -> 93.7%~ accept rate
+
+		// (nice-case) (512-94)/512 -> 91.7%~ accept rate
+		std::array<char, 256> encode_alphabet = {};
+		uint32_t              idx             = 0;
+
+		uint32_t required_chars = 0;
+
+		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
+			required_chars += 1;
+			for (size_t c = 0; c < lowercase.size(); c++) {
+				encode_alphabet[idx++] = lowercase[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_uppercase) {
+			required_chars += 1;
+			for (size_t c = 0; c < uppercase.size(); c++) {
+				encode_alphabet[idx++] = uppercase[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_digits) {
+			required_chars += 1;
+			for (size_t c = 0; c < digits.size(); c++) {
+				encode_alphabet[idx++] = digits[c];
+			}
+		}
+
+		if (options.flags & (uint32_t)generate_password_flags::use_symbols) {
+			required_chars += 1;
+			for (size_t c = 0; c < symbols.size(); c++) {
+				encode_alphabet[idx++] = symbols[c];
+			}
+		}
+
+		if (options.max_length < required_chars) {
+			output.result = generate_password_result::fail_password_required_n_chars;
+			return;
+		}
+
+		// no alphabet
+		if (idx == 0) {
+			output.result = generate_password_result::fail_no_alphabet;
+			return;
+		}
 
 		const size_t tmp_buffer_size = 8096;
-
 		const size_t hash_me_size     = (salt.size() + login.size() + master_password.size() + 2 + 2 + 64) * 2;
 		const size_t reserve_hash     = hash_me_size + max_password_size + tmp_buffer_size;
 		const size_t reserve_password = 2 * max_password_size;
@@ -246,46 +297,6 @@ private:
 		// store the hash
 		std::array<uint64_t, (crypto_generichash_KEYBYTES_MAX / 8) + 1> hashed = {};
 		std::memcpy(hashed.data(), output.password.data() + end_size, digest_length);
-
-		// Use various base encodings to generate the resulting password
-
-		// must be at least 256 to potentially fit entire alphabet
-		// (worst-case) (8192-256)/8192 -> 96.8%~ accept rate
-		//              (4096-256)/4096 -> 93.7%~ accept rate
-
-		// (nice-case) (512-94)/512 -> 91.7%~ accept rate
-		std::array<char, 256> encode_alphabet = {};
-		uint32_t              idx             = 0;
-
-		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
-			for (size_t c = 0; c < lowercase.size(); c++) {
-				encode_alphabet[idx++] = lowercase[c];
-			}
-		}
-
-		if (options.flags & (uint32_t)generate_password_flags::use_uppercase) {
-			for (size_t c = 0; c < uppercase.size(); c++) {
-				encode_alphabet[idx++] = uppercase[c];
-			}
-		}
-
-		if (options.flags & (uint32_t)generate_password_flags::use_digits) {
-			for (size_t c = 0; c < digits.size(); c++) {
-				encode_alphabet[idx++] = digits[c];
-			}
-		}
-
-		if (options.flags & (uint32_t)generate_password_flags::use_symbols) {
-			for (size_t c = 0; c < symbols.size(); c++) {
-				encode_alphabet[idx++] = symbols[c];
-			}
-		}
-
-		// no alphabet
-		if (idx == 0) {
-			output.result = generate_password_result::fail_no_alphabet;
-			return;
-		}
 
 		const uint64_t alphabet_size = idx;
 
