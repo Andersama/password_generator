@@ -7,6 +7,10 @@
 #include <string_view>
 #include <charconv>
 #include <array>
+#include <algorithm>
+
+#include <memory>
+#include <memory_resource>
 
 #include <sodium.h>
 
@@ -20,7 +24,7 @@ namespace rng {
 	{
 		return rotl(val, val >> (64 - 3));
 	}
-	
+
 	inline uint64_t self_rotl_low(uint64_t val) noexcept
 	{
 		return rotl(val, val & 0x7);
@@ -29,7 +33,55 @@ namespace rng {
 
 namespace password_generator {
 
-	struct clear_string : std::string {
+	class clearing_resource : public std::pmr::memory_resource {
+private:
+		struct allocation_record {
+			void*  ptr       = {};
+			size_t size      = {};
+			size_t alignment = {};
+		};
+
+public:
+		explicit clearing_resource(std::pmr::memory_resource* upstream = std::pmr::get_default_resource())
+			: upstream_resource(upstream)
+		{
+		}
+
+		void* do_allocate(size_t bytes, size_t alignment) override
+		{
+			void* mem = upstream_resource->allocate(bytes, alignment);
+			std::memset(mem, 0, bytes);
+			previous.emplace_back(mem, bytes, alignment);
+			return mem;
+		}
+
+		void do_deallocate(void* ptr, size_t bytes, size_t alignment) override
+		{
+			auto it = std::find_if(previous.begin(), previous.end(),
+							[&ptr, &bytes](const allocation_record& record) { return record.ptr == ptr; });
+			if (it != previous.end()) {
+				std::memset(ptr, 0, it->size);
+				upstream_resource->deallocate(ptr, it->size, it->alignment);
+				previous.erase(it);
+			}
+		}
+
+		bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override
+		{
+			return this == &other;
+		}
+
+private:
+		std::vector<allocation_record> previous;
+		std::pmr::memory_resource*     upstream_resource;
+	};
+
+	struct clear_string : std::pmr::string {
+		clear_string(std::pmr::memory_resource* upstream = std::pmr::get_default_resource())
+			: std::pmr::string(upstream)
+		{
+		}
+
 		constexpr void clear() noexcept
 		{
 			size_t cap = capacity();
@@ -37,7 +89,7 @@ namespace password_generator {
 			for (size_t x = 0; x < cap; x++) {
 				dat[x] = 0;
 			}
-			std::string::clear();
+			std::pmr::string::clear();
 		}
 
 		~clear_string()
@@ -70,13 +122,15 @@ namespace password_generator {
 		fail_no_suitable_password_encoder,
 		fail_could_not_init_hasher,
 		fail_no_alphabet,
-		fail_min_max_lengths
+		fail_min_max_lengths,
+		fail_too_large_max_length
 	};
 
 	using namespace std::literals;
-	std::array<std::string_view, ((uint32_t)generate_password_result::fail_min_max_lengths) + 1> result_string = {
+	std::array<std::string_view, ((uint32_t)generate_password_result::fail_too_large_max_length) + 1> result_string = {
 					"ok"sv, "fail"sv, "salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
-					"coult not initialize hasher"sv, "no alphbet selected"sv, "min length not <= than max length"};
+					"coult not initialize hasher"sv, "no alphbet selected"sv, "min length not <= than max length"sv,
+					"max length was too large keep under 65535"sv};
 
 	struct generate_password_options {
 		uint64_t seed       = 0;
@@ -99,6 +153,10 @@ namespace password_generator {
 	struct password_output {
 		generate_password_result result = generate_password_result::ok;
 		clear_string             password;
+
+		password_output(std::pmr::memory_resource* upstream = std::pmr::get_default_resource()) : password(upstream)
+		{
+		}
 	};
 
 	inline uint32_t classify_password(std::string_view password) noexcept
@@ -124,7 +182,8 @@ namespace password_generator {
 
 	template<typename T> inline void monotonic_increment(T& value)
 	{
-		value = (value < (value + 1)) ? value + 1 : value;
+		T next = value + 1;
+		value  = (value < next) ? next : value;
 	}
 
 	void generate_password(password_output& output, std::string_view salt, std::string_view login,
@@ -141,6 +200,12 @@ namespace password_generator {
 		const size_t max_password_size = options.max_length;
 		if (options.min_length > options.max_length) {
 			output.result = generate_password_result::fail_min_max_lengths;
+			return;
+		}
+
+		// this limit is so we don't explode our allocators
+		if (options.max_length > 0xffff) {
+			output.result = generate_password_result::fail_too_large_max_length;
 			return;
 		}
 
@@ -239,9 +304,9 @@ namespace password_generator {
 		for (;;) {
 			uint32_t v = {};
 
-			crypto_stream_xchacha20((unsigned char*)&v, sizeof(v),
-							((const unsigned char*)hashed.data()),
-							((const unsigned char*)hashed.data()) + crypto_stream_xchacha20_KEYBYTES); //crypto_stream_xchacha20_NONCEBYTES
+			crypto_stream_xchacha20((unsigned char*)&v, sizeof(v), ((const unsigned char*)hashed.data()),
+							((const unsigned char*)hashed.data()) +
+											crypto_stream_xchacha20_KEYBYTES); // crypto_stream_xchacha20_NONCEBYTES
 			hashed[1] += 1;
 
 			// do base_x encoding mapping binary data stream into valid character sets
