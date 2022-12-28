@@ -298,6 +298,9 @@ private:
 		std::array<uint64_t, (crypto_generichash_KEYBYTES_MAX / 8) + 1> hashed = {};
 		std::memcpy(hashed.data(), output.password.data() + end_size, digest_length);
 
+		// obliterate the buffer
+		std::memset(output.password.data(), 0, output.password.capacity());
+
 		const uint64_t alphabet_size = idx;
 
 		size_t check_i = 0;
@@ -355,6 +358,8 @@ private:
 
 				// check if the bitset is satisfied and that we're at least max_length characters
 				if ((aggregate_flags & options.flags) == options.flags && !(check_i < max_password_size)) {
+					std::memset(hashed.data(), 0, hashed.size());
+
 					output.result = generate_password_result::ok;
 					// copy the ring buffered password back
 					for (size_t out_c = 0; out_c < max_password_size; out_c++) {
@@ -374,6 +379,7 @@ private:
 			}
 		}
 
+		std::memset(hashed.data(), 0, hashed.size());
 		output.password.clear();
 		return;
 	}

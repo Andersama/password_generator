@@ -6,7 +6,6 @@
 #include <charconv>
 #include <filesystem>
 
-// ripped from stackoverflow
 #ifdef WIN32
 #include <windows.h>
 #else
@@ -28,6 +27,7 @@ bool set_text(std::string_view value)
 		return false;
 }
 
+// ripped from stackoverflow
 void set_std_echo(bool enable = true)
 {
 #ifdef WIN32
