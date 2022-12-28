@@ -10,11 +10,11 @@ void usage()
 {
 	std::cout << "usage: <salt> <login> <master_password> [options default: 0 --use-lowercase --use-uppercase "
 				 "--use-digits --use-symbols]\n"
-				 "\t <unsigned integer> : set seed, use this to generate different passwords\n"
-				 "\t--use-lowercase     : allows and requires at least one character [a-z]\n"
-				 "\t--use-uppercase     : allows and requires at least one character [A-Z]\n"
-				 "\t--use-digits        : allows and requires at least one character [0-9]\n"
-				 "\t--use-symbols       : allows and requires at least one character "
+				 "\t<unsigned integer>     : set seed, use this to generate different passwords\n"
+				 "\t--use-lowercase    -l  : allows and requires at least one character [a-z]\n"
+				 "\t--use-uppercase    -u  : allows and requires at least one character [A-Z]\n"
+				 "\t--use-digits       -d  : allows and requires at least one character [0-9]\n"
+				 "\t--use-symbols      -s  : allows and requires at least one character "
 				 "[!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~]\n";
 }
 
