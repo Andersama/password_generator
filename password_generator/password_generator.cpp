@@ -4,16 +4,17 @@
 #include "password_generator.h"
 #include "clip/clip.h"
 #include <charconv>
+#include <filesystem>
 
 void usage()
 {
 	std::cout << "usage: <salt> <login> <master_password> [options default: 0 --use-lowercase --use-uppercase "
 				 "--use-digits --use-symbols]\n"
 				 "\t <unsigned integer> : set seed, use this to generate different passwords\n"
-				 "\t--use-lowercase : allows and requires at least one character [a-z]\n"
-				 "\t--use-uppercase : allows and requires at least one character [A-Z]\n"
-				 "\t--use-digits    : allows and requires at least one character [0-9]\n"
-				 "\t--use-symbols   : allows and requires at least one character "
+				 "\t--use-lowercase     : allows and requires at least one character [a-z]\n"
+				 "\t--use-uppercase     : allows and requires at least one character [A-Z]\n"
+				 "\t--use-digits        : allows and requires at least one character [0-9]\n"
+				 "\t--use-symbols       : allows and requires at least one character "
 				 "[!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~]\n";
 }
 
@@ -34,7 +35,6 @@ int main(int argc, char** argv)
 	}
 
 	if (argc >= 4) {
-		// std::string_view program = argv[0];
 		std::string_view salt  = argv[1];
 		std::string_view login = argv[2];
 		std::string_view pass  = argv[3];
@@ -80,6 +80,10 @@ int main(int argc, char** argv)
 		} else {
 			std::cout << "failed to generate password!\n";
 			std::cout << "code: " << (int)out.result << '\n';
+			std::cout << (((int)out.result < password_generator::result_string.size())
+														 ? password_generator::result_string[(int)out.result]
+														 : std::string_view{""})
+					  << '\n';
 		}
 	} else {
 		usage();

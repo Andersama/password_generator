@@ -10,79 +10,22 @@
 
 #include <sodium.h>
 
-namespace pcg {
-	typedef struct {
-		uint64_t state;
-		uint64_t inc;
-	} pcg32_random_t;
-
-	inline uint32_t pcg32_random_r(pcg32_random_t* rng) noexcept
-	{
-		uint64_t oldstate = rng->state;
-		// Advance internal state
-		rng->state = oldstate * 6364136223846793005ULL + (rng->inc | 1);
-		// Calculate output function (XSH RR), uses old state for max ILP
-		uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
-		uint32_t rot        = oldstate >> 59u;
-		return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
-	}
-
-	typedef struct {
-		uint64_t w_state;
-		uint64_t x_state;
-		uint64_t y_state;
-		uint64_t z_state;
-	} romu64_quad_random_t;
-
-	typedef struct {
-		uint64_t x_state;
-		uint64_t y_state;
-		uint64_t z_state;
-	} romu64_trio_random_t;
-
+namespace rng {
 	inline uint64_t rotl(uint64_t d, uint64_t lrot) noexcept
 	{
 		return ((d << (lrot)) | (d >> (8 * sizeof(d) - (lrot))));
 	}
 
-	inline uint64_t romu_trio_random_r(romu64_trio_random_t* rng) noexcept
+	inline uint64_t self_rotl_high(uint64_t val) noexcept
 	{
-		uint64_t xp  = rng->x_state;
-		uint64_t yp  = rng->y_state;
-		uint64_t zp  = rng->z_state;
-		rng->x_state = 15241094284759029579u * zp;
-		rng->y_state = yp - xp;
-		rng->y_state = ((rng->y_state << (12)) | (rng->y_state >> (8 * sizeof(rng->y_state) - (12))));
-		rng->z_state = zp - yp;
-		rng->z_state = ((rng->z_state << (44)) | (rng->z_state >> (8 * sizeof(rng->z_state) - (44))));
+		return rotl(val, val >> (64 - 3));
 	}
-
-	inline uint64_t romu_quad_random_r(romu64_quad_random_t* rng) noexcept
+	
+	inline uint64_t self_rotl_low(uint64_t val) noexcept
 	{
-		uint64_t wp = rng->w_state;
-		uint64_t xp = rng->x_state;
-		uint64_t yp = rng->y_state;
-		uint64_t zp = rng->z_state;
-
-		rng->w_state = 15241094284759029579u * zp; // a-mult
-		rng->x_state = zp + rotl(wp, 52);          // b-rotl, c-add
-		rng->y_state = yp - xp;                    // d-sub
-		rng->z_state = yp + wp;                    // e-add
-		rng->z_state = rotl(rng->z_state, 19);     // f-rotl
-		return xp;
+		return rotl(val, val & 0x7);
 	}
-
-	inline uint32_t multi_pcg32_random_r(
-					pcg32_random_t* rng_0, pcg32_random_t* rng_1, pcg32_random_t* rng_2, pcg32_random_t* rng_3) noexcept
-	{
-		return (pcg32_random_r(rng_0) ^ pcg32_random_r(rng_1)) + (pcg32_random_r(rng_2) ^ pcg32_random_r(rng_3));
-	}
-
-	inline uint32_t mutli_romu_quad_random_r(romu64_quad_random_t* rng_0, romu64_quad_random_t* rng_1) noexcept
-	{
-		return romu_quad_random_r(rng_0) + romu_quad_random_r(rng_1);
-	}
-} // namespace pcg
+} // namespace rng
 
 namespace password_generator {
 
@@ -115,6 +58,8 @@ namespace password_generator {
 
 		use_symbols = 1 << 6,
 		no_symbols  = 1 << 7
+
+		// custom rules
 	};
 
 	enum class generate_password_result {
@@ -124,8 +69,14 @@ namespace password_generator {
 		fail_master_password_too_short,
 		fail_no_suitable_password_encoder,
 		fail_could_not_init_hasher,
-		fail_no_alphabet
+		fail_no_alphabet,
+		fail_min_max_lengths
 	};
+
+	using namespace std::literals;
+	std::array<std::string_view, ((uint32_t)generate_password_result::fail_min_max_lengths) + 1> result_string = {
+					"ok"sv, "fail"sv, "salt too short"sv, "password too short"sv, "no suitable password encoder"sv,
+					"coult not initialize hasher"sv, "no alphbet selected"sv, "min length not <= than max length"};
 
 	struct generate_password_options {
 		uint64_t seed       = 0;
@@ -187,8 +138,11 @@ namespace password_generator {
 			return;
 		}
 
-		const size_t max_password_size = std::max(options.min_length, options.max_length);
-		const size_t min_password_size = std::min(options.min_length, options.min_length);
+		const size_t max_password_size = options.max_length;
+		if (options.min_length > options.max_length) {
+			output.result = generate_password_result::fail_min_max_lengths;
+			return;
+		}
 
 		const size_t tmp_buffer_size = 8096;
 
@@ -196,6 +150,7 @@ namespace password_generator {
 		const size_t reserve_hash     = hash_me_size + max_password_size + tmp_buffer_size;
 		const size_t reserve_password = 2 * max_password_size;
 
+		// build our string
 		output.password.reserve(std::max(reserve_hash, reserve_password));
 
 		output.password.append(salt.data(), salt.size());
@@ -223,17 +178,9 @@ namespace password_generator {
 						(const unsigned char*)output.password.data(), output.password.size(),
 						(const unsigned char*)key.data(), key.size());
 
-		// Make the hash our new string
-		output.password.assign(output.password.data() + end_size, digest_length);
-
-		// 512 bit romu pcg
-		pcg::romu64_quad_random_t rrng_0 = {0};
-		pcg::romu64_quad_random_t rrng_1 = {0};
-
-		// initalize romu with 512 bit hash
-		std::memcpy(&rrng_0, output.password.data(), sizeof(pcg::romu64_quad_random_t));
-		std::memcpy(&rrng_1, output.password.data() + sizeof(pcg::romu64_quad_random_t),
-						sizeof(pcg::romu64_quad_random_t));
+		// store the hash
+		std::array<uint64_t, (crypto_generichash_KEYBYTES_MAX / 8) + 1> hashed = {};
+		std::memcpy(hashed.data(), output.password.data() + end_size, digest_length);
 
 		// Use various base encodings to generate the resulting password
 
@@ -276,17 +223,6 @@ namespace password_generator {
 		}
 
 		const uint64_t alphabet_size = idx;
-		const uint32_t clzeros       = std::countl_zero(alphabet_size);
-
-		const uint32_t mx_shift = clzeros;
-		const uint32_t mn_shift = clzeros + 1;
-
-		const uint32_t mx_bits_shift = 64 - mx_shift;
-		const uint32_t mn_bits_shift = 64 - mn_shift;
-
-		uint64_t tmp_buf      = 0;
-		uint32_t tmp_buf_bits = 0;
-		size_t   i            = 0;
 
 		size_t check_i = 0;
 		size_t out_i   = 0;
@@ -298,19 +234,15 @@ namespace password_generator {
 
 		uint32_t circle_buf_size = max_password_size + 8;
 
-		// uint32_t divisor = ((-alphabet_size) / alphabet_size) + 1;
 		uint32_t divisor = uint32_t{0xffffffff} / alphabet_size;
 
 		for (;;) {
 			uint32_t v = {};
 
-			crypto_stream_xchacha20((unsigned char*)&v, sizeof(v), (const unsigned char*)&rrng_0,
-							(const unsigned char*)&rrng_1);
-			// rrng_0.y_state += 1;
-			rrng_0.x_state += 1;
-			// use last 16 bytes of rrng_0 to drive pcg (last 8 aren't used by chacha)
-			pcg32_random_r((pcg::pcg32_random_t*)&(rrng_0.y_state));
-			// we're now using all 512 bits, 256 are a key and 192 are a nonce
+			crypto_stream_xchacha20((unsigned char*)&v, sizeof(v),
+							((const unsigned char*)hashed.data()),
+							((const unsigned char*)hashed.data()) + crypto_stream_xchacha20_KEYBYTES); //crypto_stream_xchacha20_NONCEBYTES
+			hashed[1] += 1;
 
 			// do base_x encoding mapping binary data stream into valid character sets
 			uint32_t h_value                                                      = v / divisor;
