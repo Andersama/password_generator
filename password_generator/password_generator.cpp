@@ -56,18 +56,17 @@ void set_std_echo(bool enable = true)
 
 void usage()
 {
-	std::cout << "usage: \n"
-				 "\t--generate         -g  : <salt> <login> <master_password> [options default: 0 --use-lowercase "
-				 "--use-uppercase --use-digits --use-symbols]\n"
-				 "\t--random           -r  : generates a random password      [options default: 0 --use-lowercase "
-				 "--use-uppercase --use-digits --use-symbols]\n"
-				 "\t<unsigned integer>     : set seed, use this to generate different passwords\n"
-				 "\t--use-lowercase    -l  : allows and requires at least one character [a-z]\n"
-				 "\t--use-uppercase    -u  : allows and requires at least one character [A-Z]\n"
-				 "\t--use-digits       -d  : allows and requires at least one character [0-9]\n"
-				 "\t--use-symbols      -s  : allows and requires at least one character "
-				 "[!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~]\n"
-				 "\t--help             -h  : shows usage\n";
+std::cout << R"(usage:
+    --generate         -g  : <salt> <login> <master_password> [options default: 0 --use-lowercase --use-uppercase --use-digits --use-symbols]
+    --random           -r  : generates a random password      [options default: 0 --use-lowercase --use-uppercase --use-digits --use-symbols]
+options:
+    <unsigned integer>     : set seed, use this to generate different passwords
+    --use-lowercase    -l  : allows and requires at least one character [a-z]
+    --use-uppercase    -u  : allows and requires at least one character [A-Z]
+    --use-digits       -d  : allows and requires at least one character [0-9]
+    --use-symbols      -s  : allows and requires at least one character [!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~]
+    --help             -h  : shows usage
+)";
 }
 
 int main(int argc, char** argv)
