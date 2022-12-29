@@ -39,6 +39,9 @@ private:
 			void*  ptr       = {};
 			size_t size      = {};
 			size_t alignment = {};
+
+			constexpr allocation_record(void* ptr, size_t size, size_t alignment)
+				: ptr(ptr), size(size), alignment(alignment){};
 		};
 
 public:
