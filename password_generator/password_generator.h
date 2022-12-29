@@ -101,23 +101,18 @@ private:
 		}
 	};
 
-	enum class generate_password_flags {
+	// I only came up with 4 main categories I'd typically use, expand this if you'd like
+	using flag_type = uint32_t;
+	// to customize: add a new enum value here (must be power of 2, so do 1 << #)
+	enum class generate_password_flags : flag_type {
 		use_lowercase = 1 << 0,
-		no_lowercase  = 1 << 1,
-
-		use_uppercase = 1 << 2,
-		no_uppercase  = 1 << 3,
-
-		use_digits = 1 << 4,
-		no_digits  = 1 << 5,
-
-		use_symbols = 1 << 6,
-		no_symbols  = 1 << 7
-
+		use_uppercase = 1 << 1,
+		use_digits    = 1 << 2,
+		use_symbols   = 1 << 3
 		// custom rules
 	};
 
-	enum class generate_password_result {
+	enum class generate_password_result : flag_type {
 		ok   = 0,
 		fail = 1,
 		fail_salt_too_short,
@@ -144,17 +139,19 @@ private:
 		uint32_t min_length = 8;
 		uint32_t max_length = 32;
 
-		uint32_t flags = ((uint32_t)generate_password_flags::use_lowercase |
-						  (uint32_t)generate_password_flags::use_uppercase |
-						  (uint32_t)generate_password_flags::use_digits |
-						  (uint32_t)generate_password_flags::use_symbols);
+		flag_type flags = ((flag_type)generate_password_flags::use_lowercase |
+						   (flag_type)generate_password_flags::use_uppercase |
+						   (flag_type)generate_password_flags::use_digits |
+						   (flag_type)generate_password_flags::use_symbols);
 	};
 
+	// to customize : add a string view which the enum value will capture
 	const std::string_view lowercase = "abcdefghijklmnopqrstuvwxyz";
 	const std::string_view uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 	const std::string_view digits    = "0123456789";
 	const std::string_view symbols   = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
+	// for example:
 	const std::string_view url_safe_symbols = "-_";
 
 	struct password_output {
@@ -166,23 +163,47 @@ private:
 		}
 	};
 
-	inline uint32_t classify_password(std::string_view password) noexcept
+	// iterate over the string view and mark each character with it's enum value using |=
+	// could be made conditionless*
+	inline void generate_masks(flag_type flags, std::array<flag_type, 256>& masks)
 	{
-		uint32_t out_char_flags = {0};
-		for (size_t i = 0; i < password.size(); i++) {
-			char character = password[i];
-			// branchless comparison / flags of different character classes
-			uint32_t char_flags =
-							((character >= 'a' && character <= 'z') *
-											(uint32_t)generate_password_flags::use_lowercase) |
-							((character >= 'A' && character <= 'Z') *
-											(uint32_t)generate_password_flags::use_uppercase) |
-							((character >= '0' && character <= '9') * (uint32_t)generate_password_flags::use_digits);
-
-			for (size_t s = 0; s < symbols.size(); s++) {
-				char_flags |= ((symbols[s] == character) * (uint32_t)generate_password_flags::use_symbols);
+		if (flags & (flag_type)generate_password_flags::use_lowercase) {
+			for (size_t c = 0; c < lowercase.size(); c++) {
+				masks[(uint8_t)lowercase[c]] |= (flag_type)generate_password_flags::use_lowercase;
 			}
-			out_char_flags |= char_flags;
+		}
+
+		if (flags & (flag_type)generate_password_flags::use_uppercase) {
+			for (size_t c = 0; c < uppercase.size(); c++) {
+				masks[(uint8_t)uppercase[c]] |= (flag_type)generate_password_flags::use_uppercase;
+			}
+		}
+
+		if (flags & (flag_type)generate_password_flags::use_digits) {
+			for (size_t c = 0; c < digits.size(); c++) {
+				masks[(uint8_t)digits[c]] |= (flag_type)generate_password_flags::use_digits;
+			}
+		}
+
+		if (flags & (flag_type)generate_password_flags::use_symbols) {
+			for (size_t c = 0; c < symbols.size(); c++) {
+				masks[(uint8_t)symbols[c]] = (flag_type)generate_password_flags::use_symbols;
+			}
+		}
+
+		// add up to 32* different categories
+	}
+
+	inline flag_type classify_character(uint8_t c, std::array<flag_type, 256>& masks)
+	{
+		return masks[c];
+	}
+
+	inline flag_type classify_password(std::string_view password, std::array<flag_type, 256>& masks)
+	{
+		flag_type out_char_flags = {0};
+		for (size_t i = 0; i < password.size(); i++) {
+			out_char_flags |= masks[(uint8_t)password[i]];
 		}
 		return out_char_flags;
 	}
@@ -227,28 +248,28 @@ private:
 
 		uint32_t required_chars = 0;
 
-		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
+		if (options.flags & (flag_type)generate_password_flags::use_lowercase) {
 			required_chars += 1;
 			for (size_t c = 0; c < lowercase.size(); c++) {
 				encode_alphabet[idx++] = lowercase[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_uppercase) {
+		if (options.flags & (flag_type)generate_password_flags::use_uppercase) {
 			required_chars += 1;
 			for (size_t c = 0; c < uppercase.size(); c++) {
 				encode_alphabet[idx++] = uppercase[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_digits) {
+		if (options.flags & (flag_type)generate_password_flags::use_digits) {
 			required_chars += 1;
 			for (size_t c = 0; c < digits.size(); c++) {
 				encode_alphabet[idx++] = digits[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_symbols) {
+		if (options.flags & (flag_type)generate_password_flags::use_symbols) {
 			required_chars += 1;
 			for (size_t c = 0; c < symbols.size(); c++) {
 				encode_alphabet[idx++] = symbols[c];
@@ -265,6 +286,9 @@ private:
 			output.result = generate_password_result::fail_no_alphabet;
 			return;
 		}
+
+		std::array<flag_type, 256> character_categories = {0};
+		generate_masks(options.flags, character_categories);
 
 		const size_t tmp_buffer_size  = 8096;
 		const size_t hash_me_size     = (salt.size() + login.size() + master_password.size() + 2 + 2 + 64) * 2;
@@ -311,10 +335,16 @@ private:
 		size_t check_i = 0;
 		size_t out_i   = 0;
 
-		uint32_t since_lowercase = uint32_t{0xffffffff};
-		uint32_t since_uppercase = uint32_t{0xffffffff};
-		uint32_t since_digit     = uint32_t{0xffffffff};
-		uint32_t since_symbol    = uint32_t{0xffffffff};
+		std::array<uint32_t, sizeof(flag_type)*8> counts = {0};
+		for (size_t i = 0; i < counts.size(); i++) {
+			counts[i] = ~uint32_t{0};
+		}
+
+		// arbitrary selection
+		uint32_t& since_lowercase = counts[0];
+		uint32_t& since_uppercase = counts[1];
+		uint32_t& since_digit     = counts[2];
+		uint32_t& since_symbol    = counts[3];
 
 		uint32_t circle_buf_size = max_password_size + 8;
 
@@ -341,17 +371,30 @@ private:
 				monotonic_increment(since_symbol);
 
 				// categorize the password character into exclusive groups
+				/*
 				std::string_view potential_password_char = std::string_view{
 								output.password.data() + max_password_size + (check_i % circle_buf_size),
 								1}; // current_password.substr(idx, 1);
-				uint32_t char_flags = classify_password(potential_password_char);
+								*/
+				flag_type char_flags = classify_character(
+								output.password.data()[max_password_size + (check_i % circle_buf_size)],
+								character_categories);
 
 				// reset the counts if any of the flags are set
+				// combine counts back into an aggregated bitset
+				flag_type aggregate_flags = {0};
+				for (size_t i = 0; i < counts.size(); i++) {
+					flag_type mask = (1 << i);
+					counts[i]      = (char_flags & mask) ? 0 : counts[i];
+					aggregate_flags |= (counts[i] < max_password_size) * mask;
+				}
+				/*
 				since_lowercase = (char_flags & (uint32_t)generate_password_flags::use_lowercase) ? 0 : since_lowercase;
 				since_uppercase = (char_flags & (uint32_t)generate_password_flags::use_uppercase) ? 0 : since_uppercase;
 				since_digit     = (char_flags & (uint32_t)generate_password_flags::use_digits) ? 0 : since_digit;
 				since_symbol    = (char_flags & (uint32_t)generate_password_flags::use_symbols) ? 0 : since_symbol;
-
+				*/
+				/*
 				// combine counts back into an aggregated bitset
 				uint32_t aggregate_flags =
 								((since_lowercase < max_password_size) *
@@ -360,7 +403,7 @@ private:
 												(uint32_t)generate_password_flags::use_uppercase) |
 								((since_digit < max_password_size) * (uint32_t)generate_password_flags::use_digits) |
 								((since_symbol < max_password_size) * (uint32_t)generate_password_flags::use_symbols);
-
+								*/
 				// check if the bitset is satisfied and that we're at least max_length characters
 				if ((aggregate_flags & options.flags) == options.flags && !(check_i < max_password_size)) {
 					std::memset(hashed.data(), 0, hashed.size());
@@ -420,6 +463,7 @@ private:
 		} while (l < length);
 	}
 
+	// probably way overcomplicated
 	void generate_random_password(password_output& output, const generate_password_options& options)
 	{
 		output.result                         = generate_password_result::fail;
@@ -434,37 +478,50 @@ private:
 		uint32_t idx            = 0;
 		uint32_t required_chars = 0;
 
-		if (options.flags & (uint32_t)generate_password_flags::use_lowercase) {
+		if (options.flags & (flag_type)generate_password_flags::use_lowercase) {
 			required_chars += 1;
 			for (size_t c = 0; c < lowercase.size(); c++) {
 				encode_alphabet[idx++] = lowercase[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_uppercase) {
+		if (options.flags & (flag_type)generate_password_flags::use_uppercase) {
 			required_chars += 1;
 			for (size_t c = 0; c < uppercase.size(); c++) {
 				encode_alphabet[idx++] = uppercase[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_digits) {
+		if (options.flags & (flag_type)generate_password_flags::use_digits) {
 			required_chars += 1;
 			for (size_t c = 0; c < digits.size(); c++) {
 				encode_alphabet[idx++] = digits[c];
 			}
 		}
 
-		if (options.flags & (uint32_t)generate_password_flags::use_symbols) {
+		if (options.flags & (flag_type)generate_password_flags::use_symbols) {
 			required_chars += 1;
 			for (size_t c = 0; c < symbols.size(); c++) {
 				encode_alphabet[idx++] = symbols[c];
 			}
 		}
 
+		if (options.max_length < required_chars) {
+			output.result = generate_password_result::fail_password_required_n_chars;
+			return;
+		}
+
+		// no alphabet
+		if (idx == 0) {
+			output.result = generate_password_result::fail_no_alphabet;
+			return;
+		}
+
 		// really make sure our data's shuffled around, permute our output
+		// here we're banking that whatever weird bias our data stream may
+		// have that we'll spread it out
 		for (size_t x = 1; x < idx; x++) {
-			size_t range   = x;
+			size_t range = x;
 
 			size_t divisor = (~size_t{0}) / range;
 			size_t rng     = {};
@@ -480,15 +537,24 @@ private:
 			std::swap(encode_alphabet[x], encode_alphabet[v]);
 		}
 
+		std::array<flag_type, 256> character_categories = {0};
+		generate_masks(options.flags, character_categories);
+
 		const uint32_t alphabet_size = idx;
 
 		size_t check_i = 0;
 		size_t out_i   = 0;
 
-		uint32_t since_lowercase = uint32_t{0xffffffff};
-		uint32_t since_uppercase = uint32_t{0xffffffff};
-		uint32_t since_digit     = uint32_t{0xffffffff};
-		uint32_t since_symbol    = uint32_t{0xffffffff};
+		std::array<uint32_t, sizeof(flag_type)* 8> counts = {0};
+		for (size_t i = 0; i < counts.size(); i++) {
+			counts[i] = ~uint32_t{0};
+		}
+
+		// arbitrary selection
+		uint32_t& since_lowercase = counts[0];
+		uint32_t& since_uppercase = counts[1];
+		uint32_t& since_digit     = counts[2];
+		uint32_t& since_symbol    = counts[3];
 
 		uint32_t divisor = uint32_t{0xffffffff} / alphabet_size;
 
@@ -510,11 +576,23 @@ private:
 				monotonic_increment(since_symbol);
 
 				// categorize the password character into exclusive groups
+				/*
 				std::string_view potential_password_char = std::string_view{
 								output.password.data() + max_password_size + (check_i % circle_buf_size),
 								1}; // current_password.substr(idx, 1);
-				uint32_t char_flags = classify_password(potential_password_char);
+								*/
+				flag_type char_flags = classify_character(
+								output.password.data()[max_password_size + (check_i % circle_buf_size)],
+								character_categories);
+				// classify_password(potential_password_char);
 
+				flag_type aggregate_flags = {0};
+				for (size_t i = 0; i < counts.size(); i++) {
+					flag_type mask = (1 << i);
+					counts[i]     = (char_flags & mask) ? 0 : counts[i];
+					aggregate_flags |= (counts[i] < max_password_size) * mask;
+				}
+				/*
 				// reset the counts if any of the flags are set
 				since_lowercase = (char_flags & (uint32_t)generate_password_flags::use_lowercase) ? 0 : since_lowercase;
 				since_uppercase = (char_flags & (uint32_t)generate_password_flags::use_uppercase) ? 0 : since_uppercase;
@@ -529,6 +607,7 @@ private:
 												(uint32_t)generate_password_flags::use_uppercase) |
 								((since_digit < max_password_size) * (uint32_t)generate_password_flags::use_digits) |
 								((since_symbol < max_password_size) * (uint32_t)generate_password_flags::use_symbols);
+								*/
 
 				// check if the bitset is satisfied and that we're at least max_length characters
 				if ((aggregate_flags & options.flags) == options.flags && !(check_i < max_password_size)) {
