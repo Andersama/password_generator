@@ -6,16 +6,6 @@
 #include <charconv>
 #include <filesystem>
 
-#ifdef WIN32
-#include <windows.h>
-#else
-#include <termios.h>
-#include <unistd.h>
-#endif
-
-#undef min
-#undef max
-
 // set clipboard text
 bool set_text(std::string_view value)
 {
@@ -27,38 +17,12 @@ bool set_text(std::string_view value)
 		return false;
 }
 
-// ripped from stackoverflow
-void set_std_echo(bool enable = true)
-{
-#ifdef WIN32
-	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-	DWORD  mode;
-	GetConsoleMode(hStdin, &mode);
-
-	if (!enable)
-		mode &= ~ENABLE_ECHO_INPUT;
-	else
-		mode |= ENABLE_ECHO_INPUT;
-
-	SetConsoleMode(hStdin, mode);
-
-#else
-	struct termios tty;
-	tcgetattr(STDIN_FILENO, &tty);
-	if (!enable)
-		tty.c_lflag &= ~ECHO;
-	else
-		tty.c_lflag |= ECHO;
-
-	(void)tcsetattr(STDIN_FILENO, TCSANOW, &tty);
-#endif
-}
-
 void usage()
 {
-std::cout << R"(usage:
+	std::cout << R"(usage:
     --generate         -g  : <salt> <login> <master_password> [options default: 0 --use-lowercase --use-uppercase --use-digits --use-symbols]
     --random           -r  : generates a random password      [options default: 0 --use-lowercase --use-uppercase --use-digits --use-symbols]
+    --bytes            -b  : generates random bytes
 options:
     <unsigned integer>     : set seed, use this to generate different passwords
     --use-lowercase    -l  : allows and requires at least one character [a-z]
@@ -101,7 +65,9 @@ int main(int argc, char** argv)
 	password_generator::clear_string buf{&clearing_mem};
 	buf.reserve(3 * 1024);
 
-	set_std_echo(false);
+	std::array<uint32_t, 256> counts;
+
+	password_generator::set_std_echo(false);
 
 	uint32_t new_flags = {0};
 	uint64_t seed      = {0};
@@ -118,8 +84,7 @@ int main(int argc, char** argv)
 
 	bool opt_random   = false;
 	bool opt_password = false;
-
-	bool opt_silent = false;
+	bool opt_bytes    = false;
 
 	std::string_view salt;
 	std::string_view login;
@@ -160,8 +125,8 @@ int main(int argc, char** argv)
 			salt         = argv[i + 1];
 			login        = argv[i + 2];
 			pass         = argv[i + 3];
-		} else if (arg.compare("--silent"sv) == 0 || arg.compare("-s"sv) == 0) {
-			opt_silent = true;
+		} else if (arg.compare("--bytes"sv) == 0 || arg.compare("-b"sv) == 0) {
+			opt_bytes = true;
 		} else {
 			// try to parse a number as a seed
 			seeded = true;
@@ -171,8 +136,9 @@ int main(int argc, char** argv)
 
 	// we can enter a string of y's and n's if we want here
 	char do_random = 0;
+	char do_bytes  = 0;
 
-	if (!opt_random) {
+	if (!opt_random && !opt_bytes) {
 		std::cout << "\nrandom?    : [y/n] ";
 		do {
 			std::cin >> do_random;
@@ -183,66 +149,82 @@ int main(int argc, char** argv)
 			}
 		} while (true);
 		opt_random = (do_random == 'y' || do_random == 'Y');
+
+		if (opt_random) {
+			std::cout << "\nbytes?     : [y/n] ";
+			do {
+				std::cin >> do_bytes;
+				if (do_bytes == 'y' || do_bytes == 'Y' || do_bytes == 'n' || do_bytes == 'N') {
+					break;
+				} else {
+					std::cout << "\rbytes?     : [y/n] (enter [yYnN]) ";
+				}
+			} while (true);
+			opt_bytes = (do_bytes == 'y' || do_bytes == 'Y');
+		}
 	}
 
 	char use_lowercase = 0;
-	if (!opt_lowercase) {
-		std::cout << "\nlowercase? : [y/n] ";
-		do {
-			std::cin >> use_lowercase;
-			if (use_lowercase == 'y' || use_lowercase == 'Y' || use_lowercase == 'n' || use_lowercase == 'N') {
-				break;
-			} else {
-				std::cout << "\rlowercase? : [y/n] (enter [yYnN]) ";
-			}
-		} while (true);
-		new_flags |= (uint32_t)password_generator::generate_password_flags::use_lowercase *
-					 (use_lowercase == 'y' || use_lowercase == 'Y');
-	}
-
 	char use_uppercase = 0;
-	if (!opt_uppercase) {
-		std::cout << "\nuppercase? : [y/n] ";
-		do {
-			std::cin >> use_uppercase;
-			if (use_uppercase == 'y' || use_uppercase == 'Y' || use_uppercase == 'n' || use_uppercase == 'N') {
-				break;
-			} else {
-				std::cout << "\ruppercase? : [y/n] (enter [yYnN]) ";
-			}
-		} while (true);
-		new_flags |= (uint32_t)password_generator::generate_password_flags::use_uppercase *
-					 (use_uppercase == 'y' || use_uppercase == 'Y');
-	}
+	char use_digits    = 0;
+	char use_symbols   = 0;
 
-	char use_digits = 0;
-	if (!opt_digits) {
-		std::cout << "\ndigits?    : [y/n] ";
-		do {
-			std::cin >> use_digits;
-			if (use_digits == 'y' || use_digits == 'Y' || use_digits == 'n' || use_digits == 'N') {
-				break;
-			} else {
-				std::cout << "\rdigits?    : [y/n] (enter [yYnN]) ";
-			}
-		} while (true);
-		new_flags |= (uint32_t)password_generator::generate_password_flags::use_digits *
-					 (use_digits == 'y' || use_digits == 'Y');
-	}
+	if (!opt_bytes) {
+		if (!opt_lowercase) {
+			std::cout << "\nlowercase? : [y/n] ";
+			do {
+				std::cin >> use_lowercase;
+				if (use_lowercase == 'y' || use_lowercase == 'Y' || use_lowercase == 'n' || use_lowercase == 'N') {
+					break;
+				} else {
+					std::cout << "\rlowercase? : [y/n] (enter [yYnN]) ";
+				}
+			} while (true);
+			new_flags |= (uint32_t)password_generator::generate_password_flags::use_lowercase *
+						 (use_lowercase == 'y' || use_lowercase == 'Y');
+		}
 
-	char use_symbols = 0;
-	if (!opt_symbols) {
-		std::cout << "\nsymbols?   : [y/n] ";
-		do {
-			std::cin >> use_symbols;
-			if (use_symbols == 'y' || use_symbols == 'Y' || use_symbols == 'n' || use_symbols == 'N') {
-				break;
-			} else {
-				std::cout << "\rsymbols?   : [y/n] (enter [yYnN]) ";
-			}
-		} while (true);
-		new_flags |= (uint32_t)password_generator::generate_password_flags::use_symbols *
-					 (use_symbols == 'y' || use_symbols == 'Y');
+		if (!opt_uppercase) {
+			std::cout << "\nuppercase? : [y/n] ";
+			do {
+				std::cin >> use_uppercase;
+				if (use_uppercase == 'y' || use_uppercase == 'Y' || use_uppercase == 'n' || use_uppercase == 'N') {
+					break;
+				} else {
+					std::cout << "\ruppercase? : [y/n] (enter [yYnN]) ";
+				}
+			} while (true);
+			new_flags |= (uint32_t)password_generator::generate_password_flags::use_uppercase *
+						 (use_uppercase == 'y' || use_uppercase == 'Y');
+		}
+
+		if (!opt_digits) {
+			std::cout << "\ndigits?    : [y/n] ";
+			do {
+				std::cin >> use_digits;
+				if (use_digits == 'y' || use_digits == 'Y' || use_digits == 'n' || use_digits == 'N') {
+					break;
+				} else {
+					std::cout << "\rdigits?    : [y/n] (enter [yYnN]) ";
+				}
+			} while (true);
+			new_flags |= (uint32_t)password_generator::generate_password_flags::use_digits *
+						 (use_digits == 'y' || use_digits == 'Y');
+		}
+
+		if (!opt_symbols) {
+			std::cout << "\nsymbols?   : [y/n] ";
+			do {
+				std::cin >> use_symbols;
+				if (use_symbols == 'y' || use_symbols == 'Y' || use_symbols == 'n' || use_symbols == 'N') {
+					break;
+				} else {
+					std::cout << "\rsymbols?   : [y/n] (enter [yYnN]) ";
+				}
+			} while (true);
+			new_flags |= (uint32_t)password_generator::generate_password_flags::use_symbols *
+						 (use_symbols == 'y' || use_symbols == 'Y');
+		}
 	}
 
 	bool cin_ok = false;
@@ -260,6 +242,23 @@ int main(int argc, char** argv)
 			}
 		} while (true);
 		opt.max_length = max_length;
+	}
+
+	if (opt_bytes) {
+		out.password.clear();
+		out.password.reserve(opt.max_length);
+
+		password_generator::random_data(out.password.data(), opt.max_length);
+		out.password.assign(out.password.data(), opt.max_length);
+
+		out.result = password_generator::generate_password_result::ok;
+
+		set_text(std::string_view{out.password.data(), out.password.size()});
+		std::cout << "password copied to clipboard!\n";
+
+		std::memset(out.password.data(), 0, out.password.capacity());
+
+		return (int)out.result;
 	}
 
 	if (opt_random || do_random == 'y' || do_random == 'Y') {
@@ -284,6 +283,8 @@ int main(int argc, char** argv)
 
 	size_t salt_size = {};
 	if (!opt_password) {
+		std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
 		std::cout << "\nsalt       : ";
 		std::getline(std::cin, input);
 		buf.append(input.data(), input.size());
