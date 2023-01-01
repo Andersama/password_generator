@@ -60,10 +60,11 @@ int main(int argc, char** argv)
 		usage();
 	}
 
+	constexpr size_t                 kb = 1024;
 	password_generator::clear_string input{&clearing_mem};
-	input.reserve(1024);
+	input.reserve(4 * kb);
 	password_generator::clear_string buf{&clearing_mem};
-	buf.reserve(3 * 1024);
+	buf.reserve(12 * kb);
 
 	std::array<uint32_t, 256> counts;
 
@@ -89,6 +90,31 @@ int main(int argc, char** argv)
 	std::string_view salt;
 	std::string_view login;
 	std::string_view pass;
+
+	std::filesystem::path keyfile = std::filesystem::current_path() / "pg_key.dat";
+	if (!std::filesystem::exists(keyfile)) {
+		std::fstream out_file_stream;
+		out_file_stream.open(keyfile, std::ios::out | std::ios::binary);
+		
+		password_generator::random_data(buf.data(), kb);
+		out_file_stream.write((const char*)buf.data(), kb);
+		out_file_stream.close();
+		
+		std::fstream in_file_stream;
+		in_file_stream.open(keyfile, std::ios::in | std::ios::binary);
+
+		buf.assign((std::istreambuf_iterator<char>(in_file_stream)), (std::istreambuf_iterator<char>()));
+
+		in_file_stream.close();
+	} else {
+		// so we're consistant
+		std::fstream in_file_stream;
+		in_file_stream.open(keyfile, std::ios::in | std::ios::binary);
+
+		buf.assign((std::istreambuf_iterator<char>(in_file_stream)), (std::istreambuf_iterator<char>()));
+
+		in_file_stream.close();
+	}
 
 	for (size_t i = 1; i < argc; i++) {
 		std::string_view arg = argv[i];
@@ -281,6 +307,7 @@ int main(int argc, char** argv)
 		return (int)out.result;
 	}
 
+	size_t bin_salt_size = buf.size();
 	size_t salt_size = {};
 	if (!opt_password) {
 		std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
@@ -317,9 +344,9 @@ int main(int argc, char** argv)
 	}
 
 	if (!opt_password) {
-		salt  = std::string_view{buf.data(), salt_size};
-		login = std::string_view{buf.data() + salt_size, login_size};
-		pass  = std::string_view{buf.data() + salt_size + login_size, password_size};
+		salt  = std::string_view{buf.data(), bin_salt_size + salt_size};
+		login = std::string_view{buf.data() + bin_salt_size + salt_size, login_size};
+		pass  = std::string_view{buf.data() + bin_salt_size + salt_size + login_size, password_size};
 	}
 
 	if (!seeded) {

@@ -3,6 +3,7 @@
 // or project specific include files.
 
 #include <iostream>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <charconv>
@@ -12,6 +13,9 @@
 #include <memory>
 #include <memory_resource>
 #include <span>
+
+#include <fstream>
+#include <filesystem>
 
 #include <sodium.h>
 
