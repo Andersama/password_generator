@@ -32,7 +32,7 @@ EG:
 Will prompt about using symbols
 
 Note:
-The point of this repo is to be a fairly quick to setup a useful configurable personalized password generator (the configurable bits being in the .h and the quick and easy client in the .cpp).
+The point of this repo is to be a fairly quick to configure personalized password generator (the configurable bits being in the .h and the quick and easy client in the .cpp).
 
 I don't necessarily trust the cryptographic security of the functions included, I'm not a cryptographic expert. There are api functions specifically in `libsodium` for password hashing which I did not use and may be better. It appears those are designed with this kind of application in mind, supposedly they're configurable in not only how much state they can output but how difficult it is to repeat the hashing process. 
 
